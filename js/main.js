@@ -34,11 +34,14 @@ function gpuLost(audioSystem) {
   if (leaving) return;
   if (PROBE >= 0) return probeNext('LOST');
   audioSystem?.setEnabled?.(false);
+  loadingOverlay?.classList.add('hidden');
+  const q = location.search ? location.search.replace(/^\?/, '&') : '';
   const box = document.createElement('div');
   box.id = 'gpu-lost';
   box.innerHTML = `<div><h2>This device's GPU dropped the city</h2>
-    <p>Try a smaller area (<a href="?r=600">?r=600</a>) or fewer lights (<a href="?lights=8">?lights=8</a>), or run the
-    <a href="?probe=0">phone test</a> to see which settings this device keeps.</p></div>`;
+    <p>Try a smaller area (<a href="?r=600${q}">?r=600</a>), the WebGL renderer (<a href="?webgl${q}">?webgl</a>) or fewer
+    lights (<a href="?lights=8${q}">?lights=8</a>), or run the <a href="?probe=0">phone test</a> to see which settings
+    this device keeps.</p></div>`;
   document.body.append(box);
 }
 
@@ -98,6 +101,12 @@ async function initApp() {
   if (loadingStatus) {
     loadingStatus.textContent = `Initializing Three.js r${THREE.REVISION} WebGPURenderer & TSL Shaders...`;
   }
+
+  // A bar that never moves looks broken: after 45 s say what is actually happening
+  setTimeout(() => {
+    if (!loadingOverlay || loadingOverlay.classList.contains('hidden') || !loadingStatus) return;
+    loadingStatus.textContent = 'Still compiling this city for your GPU — weak phones can take a minute or more.';
+  }, 45000);
 
   // 1. Initialize Three.js WebGPURenderer with 32-bit float reversedDepthBuffer
   const renderer = new THREE.WebGPURenderer({
