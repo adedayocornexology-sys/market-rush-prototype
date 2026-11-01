@@ -803,6 +803,8 @@ async function initApp() {
       markInit('warmup');
     }
     renderPipeline.render();
+    // Pixel streaming: the frame is only readable in the same task as the render (no preserveDrawingBuffer)
+    if (window.__STREAM_CAPTURE) window.__STREAM_CAPTURE();
     if (!warmedUp) {
       warmedUp = true;
       markInit('firstFrame');
