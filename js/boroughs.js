@@ -48,7 +48,8 @@ import {
   MILL_ROCK_POLYGON,
   EAST_RIVER_BRIDGES,
   OUTER_BRIDGES,
-  streetZ
+  streetZ,
+  PHONE_AREA
 } from './city-config.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
@@ -1466,7 +1467,8 @@ const pickFrom = (arr, rand) => arr[Math.floor(rand() * arr.length) % arr.length
 const BUILD_LANDS = new Set(['nj', 'li', 'upper', 'bronx', 'si']);
 // Generic blocks out to ~9 km from Manhattan's shore (the aerial perspective swallows the city beyond ~8 km; the ground
 // shader carries the street grids on to the horizon)
-const MAX_BUILD_DIST = 9000;
+// Phone mode never sees past its own radius: the whole metro was 117k buildings and ~110 MB of heap
+const MAX_BUILD_DIST = PHONE_AREA ? PHONE_AREA.r + 1200 : 9000;
 
 // World rectangles searched for each zone's blocks: the zone map's extent within reach of Manhattan
 const BUILD_REGIONS = (() => {
