@@ -30,8 +30,8 @@ import {
 // - Fixed-size local populations replenish distant roads and sidewalks in every direction, protecting the near view.
 // - The player's vehicle or character pushes and is pushed by the traffic (SAT contact, impulses, sparks).
 
-const NUM_CARS = PHONE ? 50 : 200; // (phone mode: js/city-config.js)
-const NUM_BUSES = PHONE ? 3 : 12;
+const NUM_CARS = PHONE ? 24 : 200; // (phone mode: js/city-config.js)
+const NUM_BUSES = PHONE ? 2 : 12;
 
 // Intelligent Driver Model: max acceleration, comfortable braking, time headway, standstill gap; and the sideways
 // acceleration drivers accept in bends, which sets how fast they take each turn or lane shift

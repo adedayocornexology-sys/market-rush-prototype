@@ -25,7 +25,7 @@ import { CityAudioSystem } from './audio-system.js';
 // Switches, also on a computer: ?phone ?full ?r=<metres> ?lights=<n> ?fx (phones keep shadows, AA & SSR) ?noshadow ?noaa
 // ?nossr ?nostorage ?noreverse ?webgl ?probe (runs through the variants in turn and shows which ones live)
 const FX_QUERY = new URLSearchParams(location.search);
-const PHONE_FX_OFF = PHONE && !FX_QUERY.has('fx') ? ['noshadow', 'noaa', 'nossr'] : [];
+const PHONE_FX_OFF = PHONE && !FX_QUERY.has('fx') ? ['noshadow', 'noaa', 'nossr', 'webgl'] : [];
 const FX_OFF = { has: (k) => FX_QUERY.has(k) || PHONE_FX_OFF.includes(k), get: (k) => FX_QUERY.get(k) };
 let leaving = false; // the page is going away (phone mode lets the GPU go then, see pagehide): not a loss
 
@@ -123,6 +123,32 @@ async function initApp() {
   renderer.lighting = new ClusteredLighting(+FX_OFF.get('lights') || (PHONE ? 16 : 256), 32, 28, 48);
   container.appendChild(renderer.domElement);
 
+  // Adaptive render scale (phone): a weak GPU runs out of fill rate long before it runs out of city. Render fewer
+  // pixels and upscale instead of deleting geometry, so the art stays the same. 1.0 -> 0.5 of the CSS size; the
+  // loop below steers it towards ~30 fps.
+  let renderScale = PHONE ? 0.65 : 1.0; // 0.65 of the CSS size is soft on a 6" screen, not on the geometry
+  const applyRenderScale = (scale) => {
+    renderScale = Math.min(1.0, Math.max(0.5, Math.round(scale * 100) / 100));
+    renderer.setPixelRatio(renderScale);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  };
+
+  // A lost context is not a crash: without preventDefault the tab gives up and the page freezes for good. Hold the
+  // last frame, wait for the driver (Android reclaims contexts under memory pressure), then resume at a lower scale.
+  let contextLosses = 0;
+  renderer.domElement.addEventListener('webglcontextlost', (event) => {
+    event.preventDefault();
+    contextLosses += 1;
+    console.warn(`[gpu] context lost (#${contextLosses}) — waiting for the driver to hand it back`);
+    if (loadingStatus) loadingStatus.textContent = 'Your GPU reclaimed memory. Recovering the cityâ€¦';
+    if (loadingOverlay && contextLosses < 3) loadingOverlay.classList.remove('hidden');
+  });
+  renderer.domElement.addEventListener('webglcontextrestored', () => {
+    console.warn('[gpu] context restored — resuming at 0.6 scale');
+    applyRenderScale(0.6);
+    if (loadingOverlay) loadingOverlay.classList.add('hidden');
+  });
+
   // Start-up phase timings (logged once as "[init] ...") to keep load-time regressions traceable
   let initTimings = [];
   let initMark = performance.now();
@@ -134,11 +160,18 @@ async function initApp() {
 
   await renderer.init();
   markInit('renderer');
+  if (PHONE) applyRenderScale(renderScale);
+
+  // Build phases below run synchronously for seconds at a time (9-12 s each on a Celeron; several times that on an
+  // Android Go phone). A main thread that never yields is what makes Android call the page unresponsive and kill the
+  // tab, so hand it back between phases: the loading bar repaints and the OS keeps the page alive.
+  const yieldToBrowser = () => new Promise((resolve) => setTimeout(resolve, 0));
 
   // 2. Build Scene & Physical Atmospheric Sky / PMREM IBL / 4096x4096 Shadow Lighting
   const scene = new THREE.Scene();
   const lightingSystem = new LightingSystem(scene, renderer);
   markInit('lighting');
+  await yieldToBrowser();
 
   if (loadingStatus) {
     loadingStatus.textContent = 'Constructing Manhattan Grid, Landmarks & Streetscape...';
@@ -147,16 +180,21 @@ async function initApp() {
   // 3. Build Manhattan Geography, Iconic Landmarks, Blocks, Street Details & Traffic
   const cityGrid = buildCityGrid(scene);
   markInit('cityGrid');
+  await yieldToBrowser();
   const boroughs = buildBoroughs(scene, { sidewalks: cityGrid.sidewalks });
   markInit('boroughs');
+  await yieldToBrowser();
   const { colliders: landmarkColliders } = buildLandmarks(scene);
   markInit('landmarks');
+  await yieldToBrowser();
   const cityBlocks = buildCityBlocks(scene);
   markInit('blocks');
+  await yieldToBrowser();
   const allColliders = [...landmarkColliders, ...cityBlocks.colliders, ...boroughs.colliders, ...(cityGrid.colliders || [])];
 
   const streetDetails = buildStreetDetails(scene);
   markInit('streetDetails');
+  await yieldToBrowser();
   // Buildings turned along non-grid streets have oriented colliders whose world bounds reach past their lots: they stay
   // inside the property line anyway, so the road network (lanes & sidewalks) doesn't need them.
   // Elevated building sections that clear even a bus don't obstruct ground traffic.
@@ -166,9 +204,11 @@ async function initApp() {
     ...allColliders.filter((c) => !c.obb && (c.minY ?? 0) < 3.5)
   ], streetDetails.signalIntersections);
   markInit('traffic');
+  await yieldToBrowser();
   const highwayTraffic = createHighwayTraffic(scene, cityGrid.highwayLanes);
   buildRoadPaint(scene, trafficSystem.network);
   markInit('roadPaint');
+  await yieldToBrowser();
 
   // 4. Initialize Third-Person Controllers (Person, Car, Cyclist, Helicopter) & Multi-Camera System
   const controllerManager = new ThirdPersonControllerManager(scene, allColliders);
@@ -225,6 +265,7 @@ async function initApp() {
   if (PHONE) window.addEventListener('pageshow', (event) => { if (event.persisted) location.reload(); });
   document.addEventListener('visibilitychange', () => { if (document.hidden) savePlayerState(); });
   markInit('controllers');
+  await yieldToBrowser();
 
   // Island-wide static geometry: chunk & distance-cull the small props, shadow stand-ins for the big casters
   // (scene-culling.js)
@@ -235,6 +276,7 @@ async function initApp() {
   setupSceneCulling(scene, cullingRoots, lightingSystem.sunLight.castShadow ? lightingSystem.sunLight.shadow : null);
   if (FX_QUERY.has('debug')) window.nyc = { scene, renderer }; // (for measuring from the console)
   markInit('culling');
+  await yieldToBrowser();
 
   // On WebGPU, small InstancedMeshes (<= 1000 instances) keep their matrices in uniform buffers that three.js
   // re-uploads on every draw of every pass (~2.5 MB/frame with the shadow cascades, stalling the GPU queue).
@@ -478,7 +520,7 @@ async function initApp() {
     locationText = label;
     let place = '';
     let streets = label;
-    const split = label.indexOf(' · ');
+    const split = label.indexOf(' Â· ');
     if (split >= 0) {
       place = label.slice(0, split);
       streets = label.slice(split + 3);
@@ -539,7 +581,7 @@ async function initApp() {
       gamepadControls.setEnabled(!open);
       const mapHint = document.getElementById('fullmap-hover-info');
       if (open && touchControls.available && mapHint) {
-        mapHint.textContent = 'Tap to teleport · Drag to pan · Use + / − to zoom';
+        mapHint.textContent = 'Tap to teleport Â· Drag to pan Â· Use + / âˆ’ to zoom';
       }
     },
     onTeleport: teleportTo
@@ -745,6 +787,8 @@ async function initApp() {
   let fpsTimer = 0;
   let nextPlayerSave = 0;
   let warmedUp = false; // see the first frame below
+  let scaleAccum = 0;
+  let scaleFrames = 0;
 
   if (elFps) elFps.textContent = '60';
 
@@ -805,6 +849,23 @@ async function initApp() {
     renderPipeline.render();
     // Pixel streaming: the frame is only readable in the same task as the render (no preserveDrawingBuffer)
     if (window.__STREAM_CAPTURE) window.__STREAM_CAPTURE();
+    // Steer the render scale towards a 30 fps budget (33 ms): too slow -> fewer pixels, comfortable -> finer ones
+    if (PHONE && warmedUp) {
+      scaleAccum += Math.min(rawDt, 0.25);
+      scaleFrames += 1;
+      if (scaleFrames >= 30) {
+        const avgFrame = scaleAccum / scaleFrames;
+        scaleAccum = 0;
+        scaleFrames = 0;
+        if (avgFrame > 0.04 && renderScale > 0.5) {
+          applyRenderScale(renderScale - 0.1);
+          console.log(`[scale] ${avgFrame.toFixed(3)}s frame -> ${renderScale}`);
+        } else if (avgFrame < 0.024 && renderScale < 1.0) {
+          applyRenderScale(renderScale + 0.05);
+          console.log(`[scale] ${avgFrame.toFixed(3)}s frame -> ${renderScale}`);
+        }
+      }
+    }
     if (!warmedUp) {
       warmedUp = true;
       markInit('firstFrame');

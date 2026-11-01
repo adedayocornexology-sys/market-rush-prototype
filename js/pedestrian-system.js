@@ -4,7 +4,7 @@ import { PersonCrowd, PersonRig } from './pedestrians.js';
 
 // Local pedestrian population: connected walks, curb queues, conversations and player avoidance.
 // Traffic supplies crossing permissions and view checks; this system owns the crowd and its animation.
-const NUM_PEDS = PHONE ? 60 : 340; // (phone mode: js/city-config.js)
+const NUM_PEDS = PHONE ? 40 : 340; // (phone mode: js/city-config.js)
 const PED_RADIUS = 320;
 const NEAR_RADIUS = 350;
 const PED_SPAWN_DISTANCE = 150;
